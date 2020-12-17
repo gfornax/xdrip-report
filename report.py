@@ -211,7 +211,7 @@ class DayReadings:
         y_values = np.ma.array(yaxis)
         y_values_masked = np.ma.masked_where(y_values <= 0 , y_values)
 
-        ax.plot(xaxis, y_values_masked)
+        ax.plot(xaxis, y_values_masked, 'o', markersize=1)
         ax.margins(x=0, y=0)
         ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
