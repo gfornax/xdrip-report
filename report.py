@@ -29,10 +29,13 @@ _MAXLEVEL = 225
 _LOWLEVEL = 70
 _HIGHLEVEL = 170
 
+# ignore any readings from the first 10h after sensor start
+_NEW_SENSOR_INVALIDATION_PERIOD = 3600*10
+
 # used for insulin vs. carbs ratio
 _GRAMS_PER_UNIT = 10
 
-_BOTTOMLINE = "xdrip+ report generator v0.1 Jan 2020 Andreas Fiessler/gfornax"
+_BOTTOMLINE = "xdrip+ report generator v0.2 Dec 2020 Andreas Fiessler/gfornax"
 
 # lower boundary, used with 100-X for corresponding upper boundary
 _PERCENTILE_1 = 5
@@ -63,13 +66,15 @@ class SlotData:
                  newsensor: bool = False,
                  bolus: float = 0.0,
                  carbs: float = 0.0,
-                 iob: float = 0.0):
+                 iob: float = 0.0,
+                 invalidated: bool = False):
         self.bgval: float = bgval
         self.timestamp: datetime.datetime = timestamp
         self.newsensor: bool = newsensor
         self.bolus: float = bolus
         self.carbs: float = carbs
         self.iob: float = iob
+        self.invalidated: float = invalidated
     def bgval_mmol(self) -> float:
         """ returns current value as mmol
         """
@@ -95,7 +100,7 @@ class DayReadings:
         """
         self.validarray = []
         for reading in self.dayvalues:
-            if reading.bgval > 0:
+            if reading.bgval > 0 and not reading.invalidated:
                 self.validarray.append(reading.bgval)
 
     def avg(self) -> float:
@@ -171,15 +176,42 @@ class DayReadings:
         """
         xaxis = []
         yaxis = []
+        invalid = []
+        invalidated_limits = []
+        isininvalid = False
+        index = 0
         for reading in self.dayvalues:
             xaxis.append(f"{reading.timestamp.hour:02d}:{reading.timestamp.minute:02d}")
             yaxis.append(reading.bgval)
+            if reading.invalidated and not reading.newsensor:
+                if not isininvalid:
+                    invalid.append(index)
+                    isininvalid = True
+            else:
+                if isininvalid:
+                    invalid.append(index)
+                    isininvalid = False
+                    invalidated_limits.append(invalid)
+                    invalid = []
+            index += 1
+
+        if isininvalid:
+            invalid.append(index)
+            invalidated_limits.append(invalid)
+
 
         firstday = self.dayvalues[0].timestamp
 
         ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red')
         ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow')
         ax.plot(xaxis, yaxis)
+        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
+
+        # leave out missed (zero) readings
+        y_values = np.ma.array(yaxis)
+        y_values_masked = np.ma.masked_where(y_values <= 0 , y_values)
+
+        ax.plot(xaxis, y_values_masked)
         ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
         ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high')
         ax.margins(x=0, y=0)
@@ -201,6 +233,8 @@ class DayReadings:
                 transform=ax.transAxes,
                 family='monospace')
         ax.grid()
+        for invalidarea in invalidated_limits:
+            ax.axvspan(invalidarea[0], invalidarea[1], alpha=0.7, color='grey')
         return firstday
 
 class ReportReadings:
@@ -241,6 +275,8 @@ class ReportReadings:
             Fills internal data structures.
         """
         print("Parsing batabase...")
+        sensor_invalidation_start = 0
+        sensor_invalidation_end = 0
         xdripdb = sqlite3.connect(dbfile)
         c = xdripdb.cursor()
         # iterate through all slots in report range, fill with matching data from DB
@@ -253,13 +289,20 @@ class ReportReadings:
                                      f"WHERE {_DB_TIMESTAMP_NAME_BG} >= {match_period_start} "
                                      f"and {_DB_TIMESTAMP_NAME_BG} < {match_period_end}"):
                     slotdata.bgval = row[0]
-                    self.all_readings.append(row[0]) # collect all valid readings for overall stats
+                    if (match_period_start >= sensor_invalidation_start and
+                        match_period_start <= sensor_invalidation_end):
+                        slotdata.invalidated = True
+                    else:
+                        self.all_readings.append(row[0]) # collect all valid readings for overall stats
                     break
                 for row in c.execute(f"SELECT {_DB_FIELD_NAME_SENSOR_START} "
                                      f"FROM {_DB_TABLE_NAME_SENSORS} "
                                      f"WHERE {_DB_STARTED_NAME_SENSORS} >= {match_period_start} "
                                      f"and {_DB_STARTED_NAME_SENSORS} < {match_period_end}"):
                     slotdata.newsensor = True
+                    slotdata.invalidated = True
+                    sensor_invalidation_start = match_period_start
+                    sensor_invalidation_end = match_period_start + _NEW_SENSOR_INVALIDATION_PERIOD*1000
                     break
                 bolus = 0
                 carbs = 0
@@ -283,9 +326,15 @@ class ReportReadings:
         dailyreadings = []
         for daily_reading in self.daily_readings:
             dayreadings = []
+            # use zero values for invalidated slots as they can be masked easily
             for slotdata in daily_reading.dayvalues:
-                dayreadings.append(slotdata.bgval)
-            dailyreadings.append(dayreadings)
+                if slotdata.invalidated:
+                    dayreadings.append(0)
+                else:
+                    dayreadings.append(slotdata.bgval)
+            ret_array  = np.ma.array(dayreadings)
+            dayreadings_masked = np.ma.masked_where(ret_array <= 0 , ret_array)
+            dailyreadings.append(dayreadings_masked)
         arranged = np.array(dailyreadings).transpose()
         daypattern_mean = []
         daypattern_median = []
