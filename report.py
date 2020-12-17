@@ -38,6 +38,10 @@ _BOTTOMLINE = "xdrip+ report generator v0.1 Jan 2020 Andreas Fiessler/gfornax"
 _PERCENTILE_1 = 5
 _PERCENTILE_2 = 25
 
+# Default charts per page
+_DEFAULT_HORSIZE = 2
+_DEFAULT_VERSIZE = 3
+
 # SQL query parameters
 _DB_FIELD_NAME_BG = 'calculated_value'
 _DB_TABLE_NAME_BG = 'BgReadings'
@@ -459,14 +463,12 @@ class ReportReadings:
         sumreadings = readings_low + readings_ok + readings_high
         return readings_low/sumreadings, readings_ok/sumreadings, readings_high/sumreadings
 
-    def create_report_page(self, patname: str, filename: str):
+    def create_report_page(self, patname: str, filename: str, rows: int, columns: int):
         """ create a report pdf by passing the subfigure objects to corresponding objects
             plot methods
         """
         #calculate number of pages
-        HORSIZE = 2
-        VERSIZE = 3
-        PLOTS_PER_PAGE = HORSIZE * VERSIZE
+        PLOTS_PER_PAGE = rows * columns
         numpages = math.ceil(self.report_days/PLOTS_PER_PAGE)
         print(f"report days: {self.report_days}, numpages: {numpages}")
         dayindex = 0 ## use enum index for future day selection in report
@@ -487,7 +489,7 @@ class ReportReadings:
 
             for page in range(numpages):
                 daysinplot = []
-                fig, ax = plt.subplots(VERSIZE, HORSIZE)
+                fig, ax = plt.subplots(rows, columns)
                 fig.subplots_adjust(bottom=0.15, top=0.93, right=0.95, hspace=0.80)
                 fig.set_size_inches(w=8.2, h=11.6)
                 for ax_cur in ax.flat:
@@ -520,7 +522,11 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
     parser.add_argument("-s", "--start", help="Report start day YYYY-MM-DD")
     parser.add_argument("-e", "--end", help="Report end day YYYY-MM-DD")
     parser.add_argument("-f", "--filename", help="output PDF file name")
+    parser.add_argument("-g", "--grid", help="Layout of chart grid. WxH = W per row, H rows per page")
     args = parser.parse_args()
+
+    rows = _DEFAULT_VERSIZE
+    columns = _DEFAULT_HORSIZE
 
     if args.dbfile:
         dbfile = args.dbfile
@@ -569,11 +575,14 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
         parser.print_help()
         exit(1)
 
-    return dbfile, patname, stime, etime, filename
+    if args.grid:
+        columns, rows = [int(n) for n in args.grid.split("x")]
+
+    return dbfile, patname, stime, etime, filename, rows, columns
 
 if __name__ == '__main__':
-    dbfile, patname, stime, etime, filename = parse_args()
+    dbfile, patname, stime, etime, filename, rows, columns = parse_args()
     report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD)
     report.insert_readings(dbfile)
     print("Creating report PDF")
-    report.create_report_page(patname, filename)
+    report.create_report_page(patname, filename, rows, columns)
