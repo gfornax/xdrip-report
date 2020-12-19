@@ -25,6 +25,11 @@ _PERIOD = 5
 _MINLEVEL = 40
 _MAXLEVEL = 225
 
+# BG plot zorders
+_ZORDER_PLOT_BG = 0
+_ZORDER_PLOT_LEVEL_LINE = 1
+_ZORDER_PLOT_LINE = 2
+
 # colorize high/low range
 _LOWLEVEL = 70
 _HIGHLEVEL = 170
@@ -202,16 +207,16 @@ class DayReadings:
 
         firstday = self.dayvalues[0].timestamp
 
-        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red')
-        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow')
-        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
-        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high')
+        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red', zorder=_ZORDER_PLOT_BG)
+        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow', zorder=_ZORDER_PLOT_BG)
+        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low', zorder=_ZORDER_PLOT_LEVEL_LINE)
+        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high', zorder=_ZORDER_PLOT_LEVEL_LINE)
 
         # leave out missed (zero) readings
         y_values = np.ma.array(yaxis)
         y_values_masked = np.ma.masked_where(y_values <= 0 , y_values)
 
-        ax.plot(xaxis, y_values_masked, 'o', markersize=1)
+        ax.plot(xaxis, y_values_masked, 'o', markersize=1, zorder=_ZORDER_PLOT_LINE)
         ax.margins(x=0, y=0)
         ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
