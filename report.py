@@ -204,16 +204,14 @@ class DayReadings:
 
         ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red')
         ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow')
-        ax.plot(xaxis, yaxis)
         ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
+        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high')
 
         # leave out missed (zero) readings
         y_values = np.ma.array(yaxis)
         y_values_masked = np.ma.masked_where(y_values <= 0 , y_values)
 
-        ax.plot(xaxis, y_values_masked)
-        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
-        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high')
+        ax.plot(xaxis, y_values_masked, 'o', markersize=1)
         ax.margins(x=0, y=0)
         ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
