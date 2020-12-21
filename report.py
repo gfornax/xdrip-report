@@ -25,6 +25,19 @@ _PERIOD = 5
 _MINLEVEL = 40
 _MAXLEVEL = 225
 
+# BG plot zorders
+_ZORDER_PLOT_BG = 0
+_ZORDER_PLOT_LEVEL_LINE = 1
+_ZORDER_PLOT_LINE = 2
+_ZORDER_PLOT_MARKER_LINE = 3
+_ZORDER_PLOT_MARKER_TEXT = 4
+
+# Datapoint labels on the graph
+_PLOT_LABEL_FONTSIZE = "x-small"
+_PLOT_LABEL_SIZE = 10
+_PLOT_LABEL_XOFFSET = 0.25
+_PLOT_LABEL_YOFFSET = 14
+
 # colorize high/low range
 _LOWLEVEL = 70
 _HIGHLEVEL = 170
@@ -171,7 +184,7 @@ class DayReadings:
         return self.total_bolus()*_GRAMS_PER_UNIT/self.total_carbs()
 
 
-    def dayplot(self, ax) -> datetime.datetime:
+    def dayplot(self, ax, plotCarbs: bool, plotBolus: bool) -> datetime.datetime:
         """ Creates BG plot for one single day plus statistical values
         """
         xaxis = []
@@ -202,16 +215,21 @@ class DayReadings:
 
         firstday = self.dayvalues[0].timestamp
 
-        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red')
-        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow')
-        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low')
-        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high')
+        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red', zorder=_ZORDER_PLOT_BG)
+        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow', zorder=_ZORDER_PLOT_BG)
+        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low', zorder=_ZORDER_PLOT_LEVEL_LINE)
+        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high', zorder=_ZORDER_PLOT_LEVEL_LINE)
 
         # leave out missed (zero) readings
         y_values = np.ma.array(yaxis)
         y_values_masked = np.ma.masked_where(y_values <= 0 , y_values)
 
-        ax.plot(xaxis, y_values_masked, 'o', markersize=1)
+        ax.plot(xaxis, y_values_masked, 'o', markersize=1, zorder=_ZORDER_PLOT_LINE)
+
+        # Render carbs + bolus
+        if (plotCarbs or plotBolus):
+            self.dayplot_carb_bolus(ax, plotCarbs, plotBolus)
+
         ax.margins(x=0, y=0)
         ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
@@ -234,6 +252,53 @@ class DayReadings:
         for invalidarea in invalidated_limits:
             ax.axvspan(invalidarea[0], invalidarea[1], alpha=0.7, color='grey')
         return firstday
+
+    def dayplot_carb_bolus(self, ax, plotCarbs: bool, plotBolus: bool):
+        index = 0
+        for reading in self.dayvalues:
+            bgval = reading.bgval
+            # If plotting carbs or bolus
+            if (plotCarbs and reading.carbs) or (plotBolus and reading.bolus):
+                # a small vertical line showing where the carb/bolus is
+
+                # render carbs slightly below
+                if plotCarbs and reading.carbs:
+                    ax.vlines(
+                        index,
+                        bgval - _PLOT_LABEL_YOFFSET,
+                        bgval,
+                        zorder = _ZORDER_PLOT_MARKER_LINE,
+                        clip_on = True,
+                        color = 'k',
+                    )
+                    ax.text(
+                        index + _PLOT_LABEL_XOFFSET,
+                        bgval - _PLOT_LABEL_YOFFSET - _PLOT_LABEL_SIZE,
+                        f"{round(reading.carbs):d}g",
+                        fontsize=_PLOT_LABEL_FONTSIZE,
+                        zorder = _ZORDER_PLOT_MARKER_TEXT,
+                        clip_on = True,
+                    )
+
+                # render bolus slightly above
+                if plotBolus and reading.bolus:
+                    ax.vlines(
+                        index,
+                        bgval,
+                        bgval + _PLOT_LABEL_YOFFSET,
+                        zorder = _ZORDER_PLOT_MARKER_LINE,
+                        clip_on = True,
+                        color = 'k',
+                    )
+                    ax.text(
+                        index + _PLOT_LABEL_XOFFSET,
+                        bgval + _PLOT_LABEL_YOFFSET,
+                        f"{reading.bolus}u",
+                        fontsize=_PLOT_LABEL_FONTSIZE,
+                        zorder = _ZORDER_PLOT_MARKER_TEXT,
+                        clip_on = True,
+                    )
+            index += 1
 
 class ReportReadings:
     """ provides a list of BG readings aligned to a constant period (i.e., in "slots").
@@ -510,7 +575,7 @@ class ReportReadings:
         sumreadings = readings_low + readings_ok + readings_high
         return readings_low/sumreadings, readings_ok/sumreadings, readings_high/sumreadings
 
-    def create_report_page(self, patname: str, filename: str, rows: int, columns: int):
+    def create_report_page(self, patname: str, filename: str, rows: int, columns: int, carbs: bool, bolus: bool):
         """ create a report pdf by passing the subfigure objects to corresponding objects
             plot methods
         """
@@ -542,7 +607,7 @@ class ReportReadings:
                 for ax_cur in ax.flat:
                     if dayindex >= self.report_days:
                         break
-                    daysinplot.append(self.daily_readings[dayindex].dayplot(ax_cur))
+                    daysinplot.append(self.daily_readings[dayindex].dayplot(ax_cur, carbs, bolus))
                     dayindex += 1
                 fig.suptitle(f"BG report {daysinplot[0].year}-{daysinplot[0].month:02d}-"
                              f"{daysinplot[0].day:02d} to "
@@ -570,6 +635,8 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
     parser.add_argument("-e", "--end", help="Report end day YYYY-MM-DD")
     parser.add_argument("-f", "--filename", help="output PDF file name")
     parser.add_argument("-g", "--grid", help="Layout of chart grid. WxH = W per row, H rows per page")
+    parser.add_argument("-c", "--carbs", action="store_true", help="Show logged carbs")
+    parser.add_argument("-b", "--bolus", action="store_true", help="Show logged bolus intake")
     args = parser.parse_args()
 
     rows = _DEFAULT_VERSIZE
@@ -625,11 +692,14 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
     if args.grid:
         columns, rows = [int(n) for n in args.grid.split("x")]
 
-    return dbfile, patname, stime, etime, filename, rows, columns
+    carbs = args.carbs
+    bolus = args.bolus
+
+    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus
 
 if __name__ == '__main__':
-    dbfile, patname, stime, etime, filename, rows, columns = parse_args()
+    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus = parse_args()
     report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD)
     report.insert_readings(dbfile)
     print("Creating report PDF")
-    report.create_report_page(patname, filename, rows, columns)
+    report.create_report_page(patname, filename, rows, columns, carbs, bolus)
