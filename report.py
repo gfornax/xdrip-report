@@ -69,6 +69,15 @@ _DB_FIELD_NAME_TREATMENTS = 'carbs, insulin'
 _DB_TABLE_NAME_TREATMENTS = 'Treatments'
 _DB_TIMESTAMP_NAME_TREATMENTS = 'timestamp'
 
+def toMMOL(mgdl: float) -> float:
+    """ returns current value as mmol
+    """
+    return mgdl / 18
+
+def toUnitLabel(mmol: bool) -> str:
+    return 'mmol' if mmol else 'mg/dL'
+
+
 class SlotData:
     """ container objects for storing treatments, readings and events
         for time slots
@@ -88,16 +97,13 @@ class SlotData:
         self.carbs: float = carbs
         self.iob: float = iob
         self.invalidated: float = invalidated
-    def bgval_mmol(self) -> float:
-        """ returns current value as mmol
-        """
-        return self.bgval * 0.0555
 
 class DayReadings:
     """ stores the readings of exactly one day, divided in equally sized slots.
         Provides statistics and plotting methods
     """
-    def __init__(self, time: datetime.datetime, slots: int):
+    def __init__(self, time: datetime.datetime, slots: int, mmol: bool):
+        self.mmol = mmol
         self.dayvalues: List[SlotData] = []
         self.startdate = time
         self.timedelta = 24*60//slots # in minutes
@@ -107,6 +113,9 @@ class DayReadings:
             slotreading = SlotData(timestamp=datecursor)
             datecursor += datetime.timedelta(minutes=self.timedelta)
             self.dayvalues.append(slotreading)
+
+    def toUnit(self, value: float) -> float:
+        return toMMOL(value) if self.mmol else value
 
     def update_statistics(self) -> None:
         """ parses all values, discards invalid readings (-1)
@@ -149,9 +158,9 @@ class DayReadings:
         readings_high = 0
         for reading in self.validarray:
             if reading > 0:
-                if reading < _LOWLEVEL:
+                if reading < self.toUnit(_LOWLEVEL):
                     readings_low += 1
-                elif reading < _HIGHLEVEL:
+                elif reading < self.toUnit(_HIGHLEVEL):
                     readings_ok += 1
                 else:
                     readings_high += 1
@@ -187,6 +196,8 @@ class DayReadings:
     def dayplot(self, ax, plotCarbs: bool, plotBolus: bool) -> datetime.datetime:
         """ Creates BG plot for one single day plus statistical values
         """
+        unitLabel = toUnitLabel(self.mmol)
+
         xaxis = []
         yaxis = []
         invalid = []
@@ -215,10 +226,10 @@ class DayReadings:
 
         firstday = self.dayvalues[0].timestamp
 
-        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red', zorder=_ZORDER_PLOT_BG)
-        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow', zorder=_ZORDER_PLOT_BG)
-        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='low', zorder=_ZORDER_PLOT_LEVEL_LINE)
-        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid', label='high', zorder=_ZORDER_PLOT_LEVEL_LINE)
+        ax.axhspan(self.toUnit(_MINLEVEL), self.toUnit(_LOWLEVEL), alpha=0.2, color='red', zorder=_ZORDER_PLOT_BG)
+        ax.axhspan(self.toUnit(_HIGHLEVEL), self.toUnit(_MAXLEVEL), alpha=0.2, color='yellow', zorder=_ZORDER_PLOT_BG)
+        ax.hlines(self.toUnit(_LOWLEVEL), 0, len(xaxis), colors='k', linestyles='solid', label='low', zorder=_ZORDER_PLOT_LEVEL_LINE)
+        ax.hlines(self.toUnit(_HIGHLEVEL), 0, len(xaxis), colors='k', linestyles='solid', label='high', zorder=_ZORDER_PLOT_LEVEL_LINE)
 
         # leave out missed (zero) readings
         y_values = np.ma.array(yaxis)
@@ -231,13 +242,13 @@ class DayReadings:
             self.dayplot_carb_bolus(ax, plotCarbs, plotBolus)
 
         ax.margins(x=0, y=0)
-        ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
+        ax.axes.set_ylim(bottom=self.toUnit(_MINLEVEL), top=self.toUnit(_MAXLEVEL))
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
         ax.set(xlabel='time of day',
                title=f"{firstday.year}-{firstday.month:02d}-{firstday.day:02d}",
-               ylabel='mg/dL')
+               ylabel=unitLabel)
         timelow, timeok, timehigh = self.timeinrange()
-        daystats =  f"AVG: {self.avg():3.2f} mg/dL STDEV: {self.stdev():3.2f} mg/dL\n"
+        daystats =  f"AVG: {self.avg():3.2f} {unitLabel} STDEV: {self.stdev():3.2f} {unitLabel}\n"
         daystats += f"Est. HbA1c      : {self.hba1c():3.2f}%\n"
         daystats += (f"Time low/in/high: "
                      f"{timelow*100:3.2f}%/{timeok*100:3.2f}%/{timehigh*100:3.2f}%\n")
@@ -307,11 +318,13 @@ class ReportReadings:
         slot, it depends on the type whether others are discarded or accumulated.
         timestamps are expected in standard UNIX format in seconds.
     """
-    def __init__(self, start_time: int, end_time: int, reading_period: int):
+    def __init__(self, start_time: int, end_time: int, reading_period: int, mmol: bool):
         assert reading_period > 0, "invalid period"
         assert start_time > 0, "invalid start_time"
         assert end_time > 0, "invalid start_time"
         assert start_time + reading_period < end_time, "invalid time frame"
+
+        self.mmol = mmol
         self.start_time = start_time
         self.end_time = end_time
 
@@ -328,10 +341,14 @@ class ReportReadings:
         self.all_readings: List[float] = []
         timecursor = self.start_dtime_zero
         for _ in range(self.report_days):
-            daily_reading = DayReadings(timecursor, (24*60)//(reading_period//60))
+            daily_reading = DayReadings(timecursor, (24*60)//(reading_period//60), mmol)
             self.daily_readings.append(daily_reading)
             timecursor += datetime.timedelta(days=1)
             # TODO: handling of DST. Unclear how a reasonable approach looks like for BG readings.
+
+
+    def toUnit(self, value: float) -> float:
+        return toMMOL(value) if self.mmol else value
 
     def insert_readings(self, dbfile):
         """ opens dbfile using sqlite3 and parses desired values by direct SQL statements.
@@ -351,12 +368,12 @@ class ReportReadings:
                                      f"FROM {_DB_TABLE_NAME_BG} "
                                      f"WHERE {_DB_TIMESTAMP_NAME_BG} >= {match_period_start} "
                                      f"and {_DB_TIMESTAMP_NAME_BG} < {match_period_end}"):
-                    slotdata.bgval = row[0]
+                    slotdata.bgval = toMMOL(row[0]) if self.mmol else row[0]
                     if (match_period_start >= sensor_invalidation_start and
                         match_period_start <= sensor_invalidation_end):
                         slotdata.invalidated = True
                     else:
-                        self.all_readings.append(row[0]) # collect all valid readings for overall stats
+                        self.all_readings.append(slotdata.bgval) # collect all valid readings for overall stats
                     break
                 for row in c.execute(f"SELECT {_DB_FIELD_NAME_SENSOR_START} "
                                      f"FROM {_DB_TABLE_NAME_SENSORS} "
@@ -385,6 +402,8 @@ class ReportReadings:
     def create_daily_stats(self, ax):
         """ create daily patterns
         """
+        unitLabel = toUnitLabel(self.mmol)
+
         # arrange data for computation of patterns:
         dailyreadings = []
         for daily_reading in self.daily_readings:
@@ -428,8 +447,8 @@ class ReportReadings:
         for reading in self.daily_readings[0].dayvalues:
             xaxis.append(f"{reading.timestamp.hour:02d}:{reading.timestamp.minute:02d}")
 
-        ax.axhspan(_MINLEVEL, _LOWLEVEL, alpha=0.2, color='red')
-        ax.axhspan(_HIGHLEVEL, _MAXLEVEL, alpha=0.2, color='yellow')
+        ax.axhspan(self.toUnit(_MINLEVEL), self.toUnit(_LOWLEVEL), alpha=0.2, color='red')
+        ax.axhspan(self.toUnit(_HIGHLEVEL), self.toUnit(_MAXLEVEL), alpha=0.2, color='yellow')
         ax.plot(xaxis, daypattern_median, label='median')
         ax.plot(xaxis, daypattern_mean, label='mean')
         ax.fill_between(xaxis,
@@ -449,14 +468,14 @@ class ReportReadings:
                         np.array(daypattern_max).transpose()[1],
                         color='green',
                         alpha=0.2, label='whiskers')
-        ax.hlines(_LOWLEVEL, 0, len(xaxis), colors='k', linestyles='solid')
-        ax.hlines(_HIGHLEVEL, 0, len(xaxis), colors='k', linestyles='solid')
+        ax.hlines(self.toUnit(_LOWLEVEL), 0, len(xaxis), colors='k', linestyles='solid')
+        ax.hlines(self.toUnit(_HIGHLEVEL), 0, len(xaxis), colors='k', linestyles='solid')
         ax.margins(x=0, y=0)
-        ax.axes.set_ylim(bottom=_MINLEVEL, top=_MAXLEVEL)
+        ax.axes.set_ylim(bottom=self.toUnit(_MINLEVEL), top=self.toUnit(_MAXLEVEL))
         ax.xaxis.set_ticks(np.arange(0, len(xaxis), 48))
-        ax.set(xlabel='time of day', title=f"Daily Pattern", ylabel='mg/dL')
+        ax.set(xlabel='time of day', title=f"Daily Pattern", ylabel=unitLabel)
         timelow, timeok, timehigh = self.timeinrange()
-        daystats  = f"AVG: {self.avg():3.2f} mg/dL STDEV: {self.stdev():3.2f} mg/dL\n"
+        daystats  = f"AVG: {self.avg():3.2f} {unitLabel} STDEV: {self.stdev():3.2f} {unitLabel}\n"
         daystats += f"Est. HbA1c      : {self.hba1c():3.2f}%\n"
         daystats += (f"Time low/in/high: "
                      f"{timelow*100:3.2f}%/{timeok*100:3.2f}%/{timehigh*100:3.2f}%")
@@ -556,7 +575,7 @@ class ReportReadings:
         """ returns estimated hba1c, all report days
         """
         localavg = self.avg()
-        return (46.7 + localavg) / 28.7
+        return (self.toUnit(46.7) + localavg) / self.toUnit(28.7)
 
     def timeinrange(self):
         """ time in range statistics, all report days
@@ -566,9 +585,9 @@ class ReportReadings:
         readings_high = 0
         validarray = list(filter(lambda a: a != -1, self.all_readings))
         for reading in validarray:
-            if reading < _LOWLEVEL:
+            if reading < self.toUnit(_LOWLEVEL):
                 readings_low += 1
-            elif reading < _HIGHLEVEL:
+            elif reading < self.toUnit(_HIGHLEVEL):
                 readings_ok += 1
             else:
                 readings_high += 1
@@ -637,6 +656,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
     parser.add_argument("-g", "--grid", help="Layout of chart grid. WxH = W per row, H rows per page")
     parser.add_argument("-c", "--carbs", action="store_true", help="Show logged carbs")
     parser.add_argument("-b", "--bolus", action="store_true", help="Show logged bolus intake")
+    parser.add_argument("--mmol", action="store_true", help="Display units in mmol/L")
     args = parser.parse_args()
 
     rows = _DEFAULT_VERSIZE
@@ -694,12 +714,13 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
 
     carbs = args.carbs
     bolus = args.bolus
+    mmol = args.mmol
 
-    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus
+    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol
 
 if __name__ == '__main__':
-    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus = parse_args()
-    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD)
+    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol = parse_args()
+    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD, mmol)
     report.insert_readings(dbfile)
     print("Creating report PDF")
     report.create_report_page(patname, filename, rows, columns, carbs, bolus)
