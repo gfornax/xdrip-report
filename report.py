@@ -644,7 +644,8 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str]:
 
     if args.dbfile:
         dbfile = args.dbfile
-        assert magic.from_file(dbfile, mime=True) == 'application/x-sqlite3', "Unsupported DB type"
+        dbtype = magic.from_file(dbfile, mime=True)
+        assert dbtype == 'application/x-sqlite3' or dbtype == "application/vnd.sqlite3", "Unsupported DB type"
     else:
         parser.print_help()
         exit(1)
