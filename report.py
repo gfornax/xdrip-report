@@ -252,8 +252,9 @@ class DayReadings:
         daystats += f"Est. HbA1c      : {self.hba1c():3.2f}%\n"
         daystats += (f"Time low/in/high: "
                      f"{timelow*100:3.2f}%/{timeok*100:3.2f}%/{timehigh*100:3.2f}%\n")
-        daystats += (f"Carbs: {self.total_carbs():3.0f}g  "
-                     f"Insulin: {self.total_bolus():3.1f} Ratio: {self.total_ratio():2.1f}")
+        if (self.total_ratio()):
+            daystats += (f"Carbs: {self.total_carbs():3.0f}g  "
+                        f"Insulin: {self.total_bolus():3.1f} Ratio: {self.total_ratio():2.1f}")
         ax.text(0, -0.43, daystats,
                 horizontalalignment='left',
                 verticalalignment='center',
