@@ -1,3 +1,7 @@
+# prevent commiting personal data
+*.pdf
+*.sqlite*
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

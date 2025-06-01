@@ -43,13 +43,10 @@ _PLOT_LABEL_YOFFSET = 14
 _LOWLEVEL = 70
 _HIGHLEVEL = 170
 
-# ignore any readings from the first 10h after sensor start
-_NEW_SENSOR_INVALIDATION_PERIOD = 3600*10
-
 # used for insulin vs. carbs ratio
 _GRAMS_PER_UNIT = 10
 
-_BOTTOMLINE = "xdrip+ report generator v0.2 Dec 2020 Andreas Fiessler/gfornax"
+_BOTTOMLINE = "generated using xdrip+ report generator v0.2 Dec 2020 Andreas Fiessler/gfornax"
 
 # lower boundary, used with 100-X for corresponding upper boundary
 _PERCENTILE_1 = 5
@@ -265,7 +262,7 @@ class DayReadings:
                      f"{timelow*100:3.2f}%/{timeok*100:3.2f}%/{timehigh*100:3.2f}%\n")
         daystats += (f"       {self.total_carbs():3.0f}g  "
                      f"Bolus: {self.total_bolus():3.1f}        {self.total_basal():2.1f}\n")
-        if (self.total_ratio()):
+        if self.total_ratio():
             daystats += (f"Ratio: {self.total_ratio():2.1f}")
         ax.text(0, -0.43, daystats,
                 horizontalalignment='left',
@@ -366,7 +363,7 @@ class ReportReadings:
         slot, it depends on the type whether others are discarded or accumulated.
         timestamps are expected in standard UNIX format in seconds.
     """
-    def __init__(self, start_time: int, end_time: int, reading_period: int, mmol: bool, starttime: float):
+    def __init__(self, start_time: int, end_time: int, reading_period: int, mmol: bool, starttime: float, ignore_first_hours: float):
         assert reading_period > 0, "invalid period"
         assert start_time > 0, "invalid start_time"
         assert end_time > 0, "invalid start_time"
@@ -375,6 +372,7 @@ class ReportReadings:
         self.mmol = mmol
         self.start_time = start_time
         self.end_time = end_time
+        self.ignore_first_hours = ignore_first_hours
 
         self.start_dtime = datetime.datetime.fromtimestamp(start_time)
         self.end_dtime = datetime.datetime.fromtimestamp(end_time)
@@ -432,7 +430,7 @@ class ReportReadings:
                     slotdata.newsensor = True
                     slotdata.invalidated = True
                     sensor_invalidation_start = match_period_start
-                    sensor_invalidation_end = match_period_start + _NEW_SENSOR_INVALIDATION_PERIOD*1000
+                    sensor_invalidation_end = match_period_start + self.ignore_first_hours*3600*1000
                     break
                 bolus = 0
                 carbs = 0
@@ -704,7 +702,8 @@ class ReportReadings:
         for reading in self.report_values:
             print(f"value: {reading.bgval} on {datetime.datetime.fromtimestamp(reading.timestamp)}")
 
-def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, int, int, bool, bool, bool, float]:
+
+def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, int, int, bool, bool, bool, float, float]:
     """ parses/sanitizes CMD line args
     """
     parser = argparse.ArgumentParser()
@@ -718,6 +717,8 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
     parser.add_argument("-c", "--carbs", action="store_true", help="Show logged carbs")
     parser.add_argument("-b", "--bolus", action="store_true", help="Show logged bolus intake")
     parser.add_argument("--mmol", action="store_true", help="Display units in mmol/L")
+    parser.add_argument("-i", "--ignorefirst", help="Ignore first hours of sensor data", type=float,
+                        default=3.0)
     args = parser.parse_args()
 
     rows = _DEFAULT_VERSIZE
@@ -741,7 +742,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
         parser.print_help()
         exit(1)
     if args.start:
-        if (len(args.start) != 10):
+        if len(args.start) != 10:
             parser.print_help()
             exit(1)
         syear = args.start[:4]
@@ -756,7 +757,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
         parser.print_help()
         exit(1)
     if args.end:
-        if (len(args.end) != 10):
+        if len(args.end) != 10:
             parser.print_help()
             exit(1)
         eyear = args.end[:4]
@@ -777,13 +778,16 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
     carbs = args.carbs
     bolus = args.bolus
     mmol = args.mmol
+
+    ignore_first_hours = args.ignorefirst
     starttime = args.starttime
 
-    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, starttime
+    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours, starttime
+
 
 if __name__ == '__main__':
-    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, starttime = parse_args()
-    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD, mmol, starttime)
+    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours, starttime = parse_args()
+    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD, mmol, ignore_first_hours, starttime)
     report.insert_readings(dbfile)
     print("Creating report PDF")
     report.create_report_page(patname, filename, rows, columns, carbs, bolus)
