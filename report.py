@@ -4,6 +4,7 @@
 """
 
 import argparse
+import json
 import math
 import sqlite3
 import datetime
@@ -62,7 +63,7 @@ _DB_TIMESTAMP_NAME_BG = 'timestamp'
 _DB_FIELD_NAME_SENSOR_START = '_id'
 _DB_TABLE_NAME_SENSORS = 'Sensors'
 _DB_STARTED_NAME_SENSORS = 'started_at'
-_DB_FIELD_NAME_TREATMENTS = 'carbs, insulin'
+_DB_FIELD_NAME_TREATMENTS = 'carbs, insulinJSON'
 _DB_TABLE_NAME_TREATMENTS = 'Treatments'
 _DB_TIMESTAMP_NAME_TREATMENTS = 'timestamp'
 
@@ -84,6 +85,7 @@ class SlotData:
                  bgval: float = -1,
                  newsensor: bool = False,
                  bolus: float = 0.0,
+                 basal: float = 0.0,
                  carbs: float = 0.0,
                  iob: float = 0.0,
                  invalidated: bool = False):
@@ -91,6 +93,7 @@ class SlotData:
         self.timestamp: datetime.datetime = timestamp
         self.newsensor: bool = newsensor
         self.bolus: float = bolus
+        self.basal: float = basal
         self.carbs: float = carbs
         self.iob: float = iob
         self.invalidated: float = invalidated
@@ -182,6 +185,14 @@ class DayReadings:
             insulinsum += reading.bolus
         return insulinsum
 
+    def total_basal(self) -> float:
+        """ returns total bolus applied on day
+        """
+        insulinsum = 0.0
+        for reading in self.dayvalues:
+            insulinsum += reading.basal
+        return insulinsum
+
     def total_ratio(self) -> float:
         """ returns ratio for day
         """
@@ -249,14 +260,29 @@ class DayReadings:
         daystats += f"Est. HbA1c      : {self.hba1c():3.2f}%\n"
         daystats += (f"Time low/in/high: "
                      f"{timelow*100:3.2f}%/{timeok*100:3.2f}%/{timehigh*100:3.2f}%\n")
-        if (self.total_ratio()):
-            daystats += (f"Carbs: {self.total_carbs():3.0f}g  "
-                        f"Insulin: {self.total_bolus():3.1f} Ratio: {self.total_ratio():2.1f}")
+        daystats += (f"       {self.total_carbs():3.0f}g  "
+                     f"Bolus: {self.total_bolus():3.1f}        {self.total_basal():2.1f}\n")
+        if self.total_ratio():
+            daystats += (f"Ratio: {self.total_ratio():2.1f}")
         ax.text(0, -0.43, daystats,
                 horizontalalignment='left',
                 verticalalignment='center',
                 transform=ax.transAxes,
                 family='monospace')
+
+        ax.text(0, -0.43, '\n\nCarbs:',
+                horizontalalignment='left',
+                verticalalignment='center',
+                transform=ax.transAxes,
+                family='monospace',
+                color='g')
+
+        ax.text(0, -0.43, '\n\n'+' '*25+'Basal:',
+                horizontalalignment='left',
+                verticalalignment='center',
+                transform=ax.transAxes,
+                family='monospace',
+                color='b')
         ax.grid()
         for invalidarea in invalidated_limits:
             ax.axvspan(invalidarea[0], invalidarea[1], alpha=0.7, color='grey')
@@ -267,7 +293,7 @@ class DayReadings:
         for reading in self.dayvalues:
             bgval = reading.bgval
             # If plotting carbs or bolus
-            if (plotCarbs and reading.carbs) or (plotBolus and reading.bolus):
+            if (plotCarbs and reading.carbs) or (plotBolus and reading.bolus) or (reading.basal):
                 # a small vertical line showing where the carb/bolus is
 
                 # render carbs slightly below
@@ -278,7 +304,7 @@ class DayReadings:
                         bgval,
                         zorder = _ZORDER_PLOT_MARKER_LINE,
                         clip_on = True,
-                        color = 'k',
+                        color = 'g',
                     )
                     ax.text(
                         index + _PLOT_LABEL_XOFFSET,
@@ -287,6 +313,7 @@ class DayReadings:
                         fontsize=_PLOT_LABEL_FONTSIZE,
                         zorder = _ZORDER_PLOT_MARKER_TEXT,
                         clip_on = True,
+                        color = 'g',
                     )
 
                 # render bolus slightly above
@@ -307,6 +334,26 @@ class DayReadings:
                         zorder = _ZORDER_PLOT_MARKER_TEXT,
                         clip_on = True,
                     )
+
+                # render basal at the center
+                if reading.basal:
+                    ax.vlines(
+                        index,
+                        bgval - 2*_PLOT_LABEL_YOFFSET,
+                        bgval - _PLOT_LABEL_YOFFSET,
+                        zorder = _ZORDER_PLOT_MARKER_LINE,
+                        clip_on = True,
+                        color = 'r',
+                    )
+                    ax.text(
+                        index + _PLOT_LABEL_XOFFSET,
+                        bgval - 2*_PLOT_LABEL_YOFFSET - _PLOT_LABEL_SIZE,
+                        f"{reading.basal}u",
+                        fontsize=_PLOT_LABEL_FONTSIZE,
+                        zorder = _ZORDER_PLOT_MARKER_TEXT,
+                        clip_on = True,
+                        color = 'r',
+                    )
             index += 1
 
 class ReportReadings:
@@ -316,7 +363,7 @@ class ReportReadings:
         slot, it depends on the type whether others are discarded or accumulated.
         timestamps are expected in standard UNIX format in seconds.
     """
-    def __init__(self, start_time: int, end_time: int, reading_period: int, mmol: bool, ignore_first_hours: float):
+    def __init__(self, start_time: int, end_time: int, reading_period: int, mmol: bool, starttime: float, ignore_first_hours: float):
         assert reading_period > 0, "invalid period"
         assert start_time > 0, "invalid start_time"
         assert end_time > 0, "invalid start_time"
@@ -331,7 +378,9 @@ class ReportReadings:
         self.end_dtime = datetime.datetime.fromtimestamp(end_time)
         # sanitize the beginning of the first day and end of last day just in case
         self.start_dtime_zero = self.start_dtime.replace(minute=0, second=0, hour=0)
+        self.start_dtime_zero += datetime.timedelta(hours=starttime)
         self.end_dtime_max = self.end_dtime.replace(minute=59, second=59, hour=23)
+        self.end_dtime_max += datetime.timedelta(hours=starttime)
 
         self.reading_period = reading_period
         self.report_values: List[SlotData] = []
@@ -385,15 +434,25 @@ class ReportReadings:
                     break
                 bolus = 0
                 carbs = 0
+                basal = 0
                 for row in c.execute(f"SELECT {_DB_FIELD_NAME_TREATMENTS} "
                                      f"FROM {_DB_TABLE_NAME_TREATMENTS} "
                                      f"WHERE {_DB_TIMESTAMP_NAME_TREATMENTS} >= {match_period_start} "
                                      f"and {_DB_TIMESTAMP_NAME_TREATMENTS} < {match_period_end}"):
 
                     carbs += row[0]
-                    bolus += row[1]
+                    insulinJSON = json.loads(row[1])
+                    for entry in insulinJSON:
+                        if entry["insulin"] in ['FIASP', 'Afrezza', 'Apidra', 'Novorapid', 'Humalog', 'Lispro',
+                                                'Actrapid', ]:
+                            bolus += entry["units"]
+                        elif entry["insulin"] in ['Insulatard', 'Toujeo', 'Lantus', 'Levemir', 'Basaglar', 'Tresiba']:
+                            basal += entry["units"]
+                        else:
+                            print(f'Insulin Type: {entry["insulin"]} unknown.')
                 slotdata.carbs = carbs
                 slotdata.bolus = bolus
+                slotdata.basal = basal
                 # TODO: add IOB here
 
         xdripdb.close()
@@ -643,7 +702,8 @@ class ReportReadings:
         for reading in self.report_values:
             print(f"value: {reading.bgval} on {datetime.datetime.fromtimestamp(reading.timestamp)}")
 
-def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, int, int, bool, bool, bool, float]:
+
+def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, int, int, bool, bool, bool, float, float]:
     """ parses/sanitizes CMD line args
     """
     parser = argparse.ArgumentParser()
@@ -653,6 +713,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
     parser.add_argument("-e", "--end", help="Report end day YYYY-MM-DD")
     parser.add_argument("-f", "--filename", help="output PDF file name")
     parser.add_argument("-g", "--grid", help="Layout of chart grid. WxH = W per row, H rows per page")
+    parser.add_argument("-t", "--starttime", help="Hours after midnight when the day starts", type=float, default=3.0)
     parser.add_argument("-c", "--carbs", action="store_true", help="Show logged carbs")
     parser.add_argument("-b", "--bolus", action="store_true", help="Show logged bolus intake")
     parser.add_argument("--mmol", action="store_true", help="Display units in mmol/L")
@@ -681,7 +742,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
         parser.print_help()
         exit(1)
     if args.start:
-        if (len(args.start) != 10):
+        if len(args.start) != 10:
             parser.print_help()
             exit(1)
         syear = args.start[:4]
@@ -696,7 +757,7 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
         parser.print_help()
         exit(1)
     if args.end:
-        if (len(args.end) != 10):
+        if len(args.end) != 10:
             parser.print_help()
             exit(1)
         eyear = args.end[:4]
@@ -717,13 +778,16 @@ def parse_args() -> Tuple[str, str, datetime.datetime, datetime.datetime, str, i
     carbs = args.carbs
     bolus = args.bolus
     mmol = args.mmol
-    ignore_first_hours = args.ignorefirst
 
-    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours
+    ignore_first_hours = args.ignorefirst
+    starttime = args.starttime
+
+    return dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours, starttime
+
 
 if __name__ == '__main__':
-    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours = parse_args()
-    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD, mmol, ignore_first_hours)
+    dbfile, patname, stime, etime, filename, rows, columns, carbs, bolus, mmol, ignore_first_hours, starttime = parse_args()
+    report = ReportReadings(int(stime.timestamp()), int(etime.timestamp()), 60*_PERIOD, mmol, ignore_first_hours, starttime)
     report.insert_readings(dbfile)
     print("Creating report PDF")
     report.create_report_page(patname, filename, rows, columns, carbs, bolus)
